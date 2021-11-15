@@ -16,6 +16,8 @@
 #include <leveldb/db.h>
 #include <leveldb/write_batch.h>
 
+#include <optional>
+
 static const size_t DBWRAPPER_PREALLOC_KEY_SIZE = 64;
 static const size_t DBWRAPPER_PREALLOC_VALUE_SIZE = 1024;
 
@@ -259,7 +261,7 @@ public:
     CDBWrapper& operator=(const CDBWrapper&) = delete;
 
     template <typename K, typename V>
-    bool Read(const K& key, V& value) const
+    bool Read(const K& key, V& value, std::optional<leveldb::ReadOptions> options = {}) const
     {
         CDataStream ssKey(SER_DISK, CLIENT_VERSION);
         ssKey.reserve(DBWRAPPER_PREALLOC_KEY_SIZE);
@@ -268,7 +270,8 @@ public:
 //        leveldb::Slice slKey(SliceKey(key));
 
         std::string strValue;
-        leveldb::Status status = pdb->Get(readoptions, slKey, &strValue);
+        auto& currentOptions = options ? *options : readoptions;
+        leveldb::Status status = pdb->Get(currentOptions, slKey, &strValue);
         if (!status.ok()) {
             if (status.IsNotFound())
                 return false;
@@ -294,7 +297,7 @@ public:
     }
 
     template <typename K>
-    bool Exists(const K& key) const
+    bool Exists(const K& key, std::optional<leveldb::ReadOptions> options = {}) const
     {
         CDataStream ssKey(SER_DISK, CLIENT_VERSION);
         ssKey.reserve(DBWRAPPER_PREALLOC_KEY_SIZE);
@@ -303,7 +306,8 @@ public:
 //        leveldb::Slice slKey(SliceKey(key));
 
         std::string strValue;
-        leveldb::Status status = pdb->Get(readoptions, slKey, &strValue);
+        auto& currentOptions = options ? *options : readoptions;
+        leveldb::Status status = pdb->Get(currentOptions, slKey, &strValue);
         if (!status.ok()) {
             if (status.IsNotFound())
                 return false;
@@ -338,9 +342,30 @@ public:
         return WriteBatch(batch, true);
     }
 
-    CDBIterator *NewIterator()
+    CDBIterator *NewIterator(std::optional<leveldb::ReadOptions> options = {})
     {
-        return new CDBIterator(*this, pdb->NewIterator(iteroptions));
+        auto& currentOptions = options ? *options : iteroptions;
+        return new CDBIterator(*this, pdb->NewIterator(currentOptions));
+    }
+
+    const leveldb::Snapshot *GetSnapshot()
+    {
+        return pdb->GetSnapshot();
+    }
+
+    void ReleaseSnapshot(const leveldb::Snapshot *snapshot)
+    {
+        pdb->ReleaseSnapshot(snapshot);
+    }
+
+    leveldb::ReadOptions GetReadOptions() const
+    {
+        return readoptions;
+    }
+
+    leveldb::ReadOptions GetIterOptions() const
+    {
+        return iteroptions;
     }
 
     /**

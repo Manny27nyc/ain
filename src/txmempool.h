@@ -548,7 +548,7 @@ private:
 
     std::vector<indexed_transaction_set::const_iterator> GetSortedDepthAndScore() const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
-    std::unique_ptr<CCustomCSView> acview;
+    std::shared_ptr<CCustomCSView> acview;
 public:
     indirectmap<COutPoint, const CTransaction*> mapNextTx GUARDED_BY(cs);
     std::map<uint256, CAmount> mapDeltas;

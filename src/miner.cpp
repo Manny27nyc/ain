@@ -714,11 +714,22 @@ namespace pos {
             auto optMasternodeID = pcustomcsview->GetMasternodeIdByOperator(args.operatorID);
             if (!optMasternodeID)
             {
+                LogPrintf("no masternode operator! (%s)\n", args.operatorID.GetHex());
                 return Status::initWaiting;
             }
             tip = ::ChainActive().Tip();
             masternodeID = *optMasternodeID;
+            LogPrintf("masternodes:\n");
+            auto it = pcustomcsview->LowerBound<CMasternodesView::ID>(masternodeID);
+            if (it.Valid() && it.Key() == masternodeID) {
+                LogPrintf("masternode (%s) found by iterator\n", masternodeID.GetHex());
+            } else {
+                LogPrintf("masternode (%s) NOT found by iterator\n", masternodeID.GetHex());
+            }
             auto nodePtr = pcustomcsview->GetMasternode(masternodeID);
+            if (!nodePtr) {
+                LogPrintf("masternode (%s) NOT found by direct read\n", masternodeID.GetHex());
+            }
             if (!nodePtr || !nodePtr->IsActive(tip->height)) /// @todo miner: height+1 or nHeight+1 ???
             {
                 /// @todo may be new status for not activated (or already resigned) MN??

@@ -3179,15 +3179,7 @@ Res ApplyCustomTx(CCustomCSView& mnview, const CCoinsViewCache& coins, const CTr
         return res;
     }
 
-    // construct undo
-    auto& flushable = view.GetStorage();
-    auto undo = CUndo::Construct(mnview.GetStorage(), flushable.GetRaw());
-    // flush changes
-    view.Flush();
-    // write undo
-    if (!undo.before.empty()) {
-        mnview.SetUndo(UndoKey{height, tx.GetHash()}, undo);
-    }
+    mnview.AddUndo(view, tx.GetHash(), height);
     return res;
 }
 
@@ -3277,14 +3269,14 @@ ResVal<uint256> ApplyAnchorRewardTxPlus(CCustomCSView & mnview, CTransaction con
 
     // Miner used confirm team at chain height when creating this TX, this is height - 1.
     int anchorHeight = height - 1;
-    auto uniqueKeys = finMsg.CheckConfirmSigs(anchorHeight);
-    if (!uniqueKeys) {
-        return Res::ErrDbg("bad-ar-sigs", "anchor signatures are incorrect");
-    }
-
     auto team = mnview.GetConfirmTeam(anchorHeight);
     if (!team) {
         return Res::ErrDbg("bad-ar-team", "could not get confirm team for height: %d", anchorHeight);
+    }
+
+    auto uniqueKeys = finMsg.CheckConfirmSigs(*team, anchorHeight);
+    if (!uniqueKeys) {
+        return Res::ErrDbg("bad-ar-sigs", "anchor signatures are incorrect");
     }
 
     auto quorum = GetMinAnchorQuorum(*team);

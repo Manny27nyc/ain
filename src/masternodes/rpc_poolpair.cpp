@@ -105,7 +105,6 @@ void CheckAndFillPoolSwapMessage(const JSONRPCRequest& request, CPoolSwapMessage
         tokenTo = metadataObj["tokenTo"].getValStr();
     }
     {
-        LOCK(cs_main);
         auto token = pcustomcsview->GetTokenGuessId(tokenFrom, poolSwapMsg.idTokenFrom);
         if (!token)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "TokenFrom was not found");
@@ -184,8 +183,6 @@ UniValue listpoolpairs(const JSONRPCRequest& request) {
         }
     }
 
-    LOCK(cs_main);
-
     UniValue ret(UniValue::VOBJ);
     pcustomcsview->ForEachPoolPair([&](DCT_ID const & id, CPoolPair pool) {
         const auto token = pcustomcsview->GetToken(id);
@@ -222,8 +219,6 @@ UniValue getpoolpair(const JSONRPCRequest& request) {
     if (request.params.size() > 1) {
         verbose = request.params[1].getBool();
     }
-
-    LOCK(cs_main);
 
     DCT_ID id;
     auto token = pcustomcsview->GetTokenGuessId(request.params[0].getValStr(), id);
@@ -531,8 +526,6 @@ UniValue createpoolpair(const JSONRPCRequest& request) {
     int targetHeight;
     DCT_ID idtokenA, idtokenB;
     {
-        LOCK(cs_main);
-
         auto token = pcustomcsview->GetTokenGuessId(tokenA, idtokenA);
         if (!token)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "TokenA was not found");
@@ -541,7 +534,7 @@ UniValue createpoolpair(const JSONRPCRequest& request) {
         if (!token2)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "TokenB was not found");
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CPoolPairMessage poolPairMsg;
@@ -652,7 +645,6 @@ UniValue updatepoolpair(const JSONRPCRequest& request) {
     DCT_ID poolId;
     int targetHeight;
     {
-        LOCK(cs_main);
         auto token = pcustomcsview->GetTokenGuessId(poolStr, poolId);
         if (!token) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Pool %s does not exist!", poolStr));
@@ -663,7 +655,7 @@ UniValue updatepoolpair(const JSONRPCRequest& request) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Pool %s does not exist!", poolStr));
         }
         status = pool->status;
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     if (!metaObj["status"].isNull()) {
@@ -896,7 +888,6 @@ UniValue compositeswap(const JSONRPCRequest& request) {
     CheckAndFillPoolSwapMessage(request, poolSwapMsg);
 
     {
-        LOCK(cs_main);
         // If no direct swap found search for composite swap
         if (!pcustomcsview->GetPoolPair(poolSwapMsg.idTokenFrom, poolSwapMsg.idTokenTo)) {
 
@@ -1004,10 +995,9 @@ UniValue testpoolswap(const JSONRPCRequest& request) {
     // test execution and get amount
     Res res = Res::Ok();
     {
-        LOCK(cs_main);
         CCustomCSView mnview_dummy(*pcustomcsview); // create dummy cache for test state writing
 
-        int targetHeight = ::ChainActive().Height() + 1;
+        int targetHeight = WITH_LOCK(cs_main, return ::ChainActive().Height() + 1);
         auto poolPair = mnview_dummy.GetPoolPair(poolSwapMsg.idTokenFrom, poolSwapMsg.idTokenTo);
 
         const std::string base{"PoolSwap creation: " + poolSwapMsg.ToString()};
@@ -1094,11 +1084,7 @@ UniValue listpoolshares(const JSONRPCRequest& request) {
         }
     }
 
-    LOCK(cs_main);
-
     PoolShareKey startKey{ start, CScript{} };
-//    startKey.poolID = start;
-//    startKey.owner = CScript(0);
 
     UniValue ret(UniValue::VOBJ);
     pcustomcsview->ForEachPoolShare([&](DCT_ID const & poolId, CScript const & provider, uint32_t) {

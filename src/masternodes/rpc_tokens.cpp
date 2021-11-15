@@ -210,7 +210,6 @@ UniValue updatetoken(const JSONRPCRequest& request) {
     CScript owner;
     int targetHeight;
     {
-        LOCK(cs_main);
         DCT_ID id;
         auto token = pcustomcsview->GetTokenGuessId(tokenStr, id);
         if (id == DCT_ID{0}) {
@@ -230,7 +229,7 @@ UniValue updatetoken(const JSONRPCRequest& request) {
                                strprintf("Can't extract destination for token's %s collateral", tokenImpl.symbol));
         }
         owner = authCoin.out.scriptPubKey;
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     if (!metaObj["symbol"].isNull()) {
@@ -410,8 +409,6 @@ UniValue listtokens(const JSONRPCRequest& request) {
         }
     }
 
-    LOCK(cs_main);
-
     UniValue ret(UniValue::VOBJ);
     pcustomcsview->ForEachToken([&](DCT_ID const& id, CTokenImplementation token) {
         ret.pushKVs(tokenToJSON(id, token, verbose));
@@ -438,8 +435,6 @@ UniValue gettoken(const JSONRPCRequest& request) {
                        + HelpExampleRpc("gettoken", "GOLD")
                },
     }.Check(request);
-
-    LOCK(cs_main);
 
     DCT_ID id;
     auto token = pcustomcsview->GetTokenGuessId(request.params[0].getValStr(), id);
@@ -575,7 +570,6 @@ UniValue getcustomtx(const JSONRPCRequest& request)
     result.pushKV("type", ToString(guess));
     if (!actualHeight) {
 
-        LOCK(cs_main);
         CCustomCSView mnview(*pcustomcsview);
         CCoinsViewCache view(&::ChainstateActive().CoinsTip());
 
@@ -664,7 +658,6 @@ UniValue minttokens(const JSONRPCRequest& request) {
     std::set<CScript> auths;
     bool needFoundersAuth = false;
     if (txInputs.isNull() || txInputs.empty()) {
-        LOCK(cs_main);
         for (auto const & kv : minted.balances) {
             auto token = pcustomcsview->GetToken(kv.first);
             if (!token) {

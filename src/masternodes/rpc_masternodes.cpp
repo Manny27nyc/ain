@@ -44,7 +44,7 @@ UniValue mnToJSON(uint256 const & nodeId, CMasternode const& node, bool verbose,
         }
         obj.pushKV("localMasternode", localMasternode);
 
-        auto currentHeight = ChainActive().Height();
+        auto currentHeight = chainHeight(*pwallet->chain().lock());
         uint16_t timelock = pcustomcsview->GetTimelock(nodeId, node, currentHeight);
 
         // Only get targetMultiplier for active masternodes
@@ -254,7 +254,6 @@ UniValue setforcedrewardaddress(const JSONRPCRequest& request)
     CTxDestination ownerDest;
     int targetHeight;
     {
-        LOCK(cs_main);
         auto nodePtr = pcustomcsview->GetMasternode(nodeId);
         if (!nodePtr) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The masternode %s does not exist", nodeIdStr));
@@ -263,7 +262,7 @@ UniValue setforcedrewardaddress(const JSONRPCRequest& request)
             CTxDestination(PKHash(nodePtr->ownerAuthAddress)) :
             CTxDestination(WitnessV0KeyHash(nodePtr->ownerAuthAddress));
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     if (!::IsMine(*pwallet, ownerDest)) {
@@ -361,7 +360,6 @@ UniValue remforcedrewardaddress(const JSONRPCRequest& request)
     CTxDestination ownerDest;
     int targetHeight;
     {
-        LOCK(cs_main);
         auto nodePtr = pcustomcsview->GetMasternode(nodeId);
         if (!nodePtr) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The masternode %s does not exist", nodeIdStr));
@@ -370,7 +368,7 @@ UniValue remforcedrewardaddress(const JSONRPCRequest& request)
             CTxDestination(PKHash(nodePtr->ownerAuthAddress)) :
             CTxDestination(WitnessV0KeyHash(nodePtr->ownerAuthAddress));
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     if (!::IsMine(*pwallet, ownerDest)) {
@@ -454,7 +452,6 @@ UniValue resignmasternode(const JSONRPCRequest& request)
     CTxDestination ownerDest;
     int targetHeight;
     {
-        LOCK(cs_main);
         auto nodePtr = pcustomcsview->GetMasternode(nodeId);
         if (!nodePtr) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The masternode %s does not exist", nodeIdStr));
@@ -463,7 +460,7 @@ UniValue resignmasternode(const JSONRPCRequest& request)
             CTxDestination(PKHash(nodePtr->ownerAuthAddress)) :
             CTxDestination(WitnessV0KeyHash(nodePtr->ownerAuthAddress));
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     const auto txVersion = GetTransactionVersion(targetHeight);
@@ -557,14 +554,13 @@ UniValue updatemasternode(const JSONRPCRequest& request)
     CTxDestination ownerDest;
     int targetHeight;
     {
-        LOCK(cs_main);
         auto nodePtr = pcustomcsview->GetMasternode(nodeId);
         if (!nodePtr) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The masternode %s does not exist", nodeIdStr));
         }
         ownerDest = nodePtr->ownerType == 1 ? CTxDestination(PKHash(nodePtr->ownerAuthAddress)) : CTxDestination(WitnessV0KeyHash(nodePtr->ownerAuthAddress));
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     std::string operatorAddress = request.params[1].getValStr();
@@ -667,7 +663,6 @@ UniValue listmasternodes(const JSONRPCRequest& request)
 
     UniValue ret(UniValue::VOBJ);
 
-    LOCK(cs_main);
     const auto mnIds = pcustomcsview->GetOperatorsMulti();
     pcustomcsview->ForEachMasternode([&](uint256 const& nodeId, CMasternode node) {
         if (!including_start)
@@ -703,7 +698,6 @@ UniValue getmasternode(const JSONRPCRequest& request)
 
     uint256 id = ParseHashV(request.params[0], "masternode id");
 
-    LOCK(cs_main);
     const auto mnIds = pcustomcsview->GetOperatorsMulti();
     auto node = pcustomcsview->GetMasternode(id);
     if (node) {
@@ -742,8 +736,6 @@ UniValue getmasternodeblocks(const JSONRPCRequest& request) {
         mn_id = ParseHashV(identifier["id"], "id");
         ++idCount;
     }
-
-    LOCK(cs_main);
 
     if (!identifier["ownerAddress"].isNull()) {
         CKeyID ownerAddressID;
@@ -796,6 +788,7 @@ UniValue getmasternodeblocks(const JSONRPCRequest& request) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Masternode not found");
     }
 
+    LOCK(cs_main);
     auto lastHeight = ::ChainActive().Tip()->height + 1;
     const auto creationHeight = masternode->creationHeight;
 
@@ -860,11 +853,10 @@ UniValue getanchorteams(const JSONRPCRequest& request)
     }.Check(request);
 
     int blockHeight;
-
-    LOCK(cs_main);
     if (!request.params[0].isNull()) {
         blockHeight = request.params[0].get_int();
     } else {
+        LOCK(cs_main);
         blockHeight = ::ChainActive().Height();
     }
 
@@ -958,7 +950,6 @@ UniValue listanchors(const JSONRPCRequest& request)
                },
     }.Check(request);
 
-    LOCK(cs_main);
     auto confirms = pcustomcsview->CAnchorConfirmsView::GetAnchorConfirmData();
 
     std::sort(confirms.begin(), confirms.end(), [](CAnchorConfirmDataPlus a, CAnchorConfirmDataPlus b) {

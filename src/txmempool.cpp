@@ -593,7 +593,7 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef>& vtx, unsigne
     if (pcustomcsview) { // can happen in tests
         // check entire mempool
         CAmount txfee = 0;
-        accountsView().Discard();
+        acview.reset();
         CCustomCSView viewDuplicate(accountsView());
         CCoinsViewCache mempoolDuplicate(&::ChainstateActive().CoinsTip());
 
@@ -646,9 +646,7 @@ void CTxMemPool::clear()
 {
     LOCK(cs);
     _clear();
-    if (pcustomcsview) {
-        accountsView().Discard();
-    }
+    acview.reset();
 }
 
 static void CheckInputsAndUpdateCoins(const CTransaction& tx, CCoinsViewCache& mempoolDuplicate, const CCustomCSView * mnview, const int64_t spendheight, const CChainParams& chainparams)
@@ -975,26 +973,8 @@ size_t CTxMemPool::DynamicMemoryUsage() const {
 void CTxMemPool::RemoveStaged(const setEntries &stage, bool updateDescendants, MemPoolRemovalReason reason) {
     AssertLockHeld(cs);
     UpdateForRemoveFromMempool(stage, updateDescendants);
-    std::set<uint256> txids;
     for (txiter it : stage) {
-        txids.insert(it->GetTx().GetHash());
         removeUnchecked(it, reason);
-    }
-    if (pcustomcsview && !txids.empty()) {
-        auto& view = accountsView();
-        std::map<uint32_t, uint256> orderedTxs;
-        auto it = NewKVIterator<CUndosView::ByUndoKey>(UndoKey{}, view.GetStorage().GetRaw());
-        for (; it.Valid() && !txids.empty(); it.Next()) {
-            auto& key = it.Key();
-            auto itTx = txids.find(key.txid);
-            if (itTx != txids.end()) {
-                orderedTxs.emplace(key.height, key.txid);
-                txids.erase(itTx);
-            }
-        }
-        for (auto it = orderedTxs.rbegin(); it != orderedTxs.rend(); ++it) {
-            view.OnUndoTx(it->second, it->first);
-        }
     }
 }
 

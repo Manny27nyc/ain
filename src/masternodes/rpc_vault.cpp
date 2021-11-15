@@ -41,10 +41,7 @@ namespace {
         return VaultState::Unknown;
     }
 
-    bool WillLiquidateNext(const CVaultId& vaultId, const CVaultData& vault) {
-        auto height = ::ChainActive().Height();
-        auto blockTime = ::ChainActive()[height]->GetBlockTime();
-
+    bool WillLiquidateNext(const CVaultId& vaultId, const CVaultData& vault, int height, int blockTime) {
         auto collaterals = pcustomcsview->GetVaultCollaterals(vaultId);
         if (!collaterals)
             return false;
@@ -58,11 +55,10 @@ namespace {
         return (vaultRate.val->ratio() < loanScheme->ratio);
     }
 
-    VaultState GetVaultState(const CVaultId& vaultId, const CVaultData& vault) {
-        auto height = ::ChainActive().Height();
+    VaultState GetVaultState(const CVaultId& vaultId, const CVaultData& vault, int height, int blockTime) {
         auto inLiquidation = vault.isUnderLiquidation;
         auto priceIsValid = IsVaultPriceValid(*pcustomcsview, vaultId, height);
-        auto willLiquidateNext = WillLiquidateNext(vaultId, vault);
+        auto willLiquidateNext = WillLiquidateNext(vaultId, vault, height, blockTime);
 
         // Can possibly optimize with flags, but provides clarity for now.
         if (!inLiquidation && priceIsValid && !willLiquidateNext)
@@ -109,11 +105,11 @@ namespace {
         return auctionObj;
     }
 
-    UniValue VaultToJSON(const CVaultId& vaultId, const CVaultData& vault) {
-        UniValue result{UniValue::VOBJ};
-        auto vaultState = GetVaultState(vaultId, vault);
-        auto height = ::ChainActive().Height();
+    UniValue VaultToJSON(const CVaultId& vaultId, const CVaultData& vault, int height, int blockTime) {
 
+        auto vaultState = GetVaultState(vaultId, vault, height, blockTime);
+
+        UniValue result{UniValue::VOBJ};
         if (vaultState == VaultState::InLiquidation) {
             if (auto data = pcustomcsview->GetAuction(vaultId, height)) {
                 result.pushKVs(AuctionToJSON(vaultId, *data));
@@ -129,7 +125,6 @@ namespace {
         if (!collaterals)
             collaterals = CBalances{};
 
-        auto blockTime = ::ChainActive().Tip()->GetBlockTime();
         bool useNextPrice = false, requireLivePrice = vaultState != VaultState::Frozen;
         LogPrint(BCLog::LOAN,"%s():\n", __func__);
         auto rate = pcustomcsview->GetLoanCollaterals(vaultId, *collaterals, height + 1, blockTime, useNextPrice, requireLivePrice);
@@ -237,11 +232,7 @@ UniValue createvault(const JSONRPCRequest& request) {
         }
     }
 
-    int targetHeight;
-    {
-        LOCK(cs_main);
-        targetHeight = ::ChainActive().Height() + 1;
-    }
+    int targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
     metadata << static_cast<unsigned char>(CustomTxType::Vault)
@@ -320,8 +311,6 @@ UniValue closevault(const JSONRPCRequest& request) {
     CCloseVaultMessage msg;
     msg.vaultId = ParseHashV(request.params[0], "vaultId");
     {
-        LOCK(cs_main);
-        targetHeight = ::ChainActive().Height() + 1;
         // decode vaultId
         auto vault = pcustomcsview->GetVault(msg.vaultId);
         if (!vault)
@@ -331,6 +320,7 @@ UniValue closevault(const JSONRPCRequest& request) {
             throw JSONRPCError(RPC_TRANSACTION_REJECTED, "Vault is under liquidation.");
 
         ownerAddress = vault->ownerAddress;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     msg.to = DecodeScript(request.params[1].getValStr());
@@ -475,9 +465,10 @@ UniValue listvaults(const JSONRPCRequest& request) {
 
     UniValue valueArr{UniValue::VARR};
 
-    LOCK(cs_main);
+    auto [height, blockTime] = WITH_LOCK(cs_main,
+        return std::make_pair(::ChainActive().Height(), ::ChainActive().Tip()->GetBlockTime()));
 
-    pcustomcsview->ForEachVault([&](const CVaultId& vaultId, const CVaultData& data) {
+    pcustomcsview->ForEachVault([&, height = height, blockTime = blockTime](const CVaultId& vaultId, const CVaultData& data) {
         if (!including_start)
         {
             including_start = true;
@@ -486,7 +477,7 @@ UniValue listvaults(const JSONRPCRequest& request) {
         if (!ownerAddress.empty() && ownerAddress != data.ownerAddress) {
             return false;
         }
-        auto vaultState = GetVaultState(vaultId, data);
+        auto vaultState = GetVaultState(vaultId, data, height, blockTime);
 
         if ((loanSchemeId.empty() || loanSchemeId == data.schemeId)
         && (state == VaultState::Unknown || state == vaultState)) {
@@ -497,7 +488,7 @@ UniValue listvaults(const JSONRPCRequest& request) {
                 vaultObj.pushKV("loanSchemeId", data.schemeId);
                 vaultObj.pushKV("state", VaultStateToString(vaultState));
             } else {
-                vaultObj = VaultToJSON(vaultId, data);
+                vaultObj = VaultToJSON(vaultId, data, height, blockTime);
             }
             valueArr.push_back(vaultObj);
             limit--;
@@ -528,14 +519,15 @@ UniValue getvault(const JSONRPCRequest& request) {
 
     CVaultId vaultId = ParseHashV(request.params[0], "vaultId");
 
-    LOCK(cs_main);
-
     auto vault = pcustomcsview->GetVault(vaultId);
     if (!vault) {
         throw JSONRPCError(RPC_DATABASE_ERROR, strprintf("Vault <%s> not found", vaultId.GetHex()));
     }
 
-    return VaultToJSON(vaultId, *vault);
+    auto [height, blockTime] = WITH_LOCK(cs_main,
+        return std::make_pair(::ChainActive().Height(), ::ChainActive().Tip()->GetBlockTime()));
+
+    return VaultToJSON(vaultId, *vault, height, blockTime);
 }
 
 UniValue updatevault(const JSONRPCRequest& request) {
@@ -595,8 +587,6 @@ UniValue updatevault(const JSONRPCRequest& request) {
     CVaultMessage vault;
     CVaultId vaultId = ParseHashV(request.params[0], "vaultId");
     {
-        LOCK(cs_main);
-        targetHeight = ::ChainActive().Height() + 1;
         // decode vaultId
         auto storedVault = pcustomcsview->GetVault(vaultId);
         if (!storedVault)
@@ -606,6 +596,7 @@ UniValue updatevault(const JSONRPCRequest& request) {
             throw JSONRPCError(RPC_TRANSACTION_REJECTED, "Vault is under liquidation.");
 
         vault = *storedVault;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CUpdateVaultMessage msg{
@@ -819,14 +810,13 @@ UniValue withdrawfromvault(const JSONRPCRequest& request) {
     int targetHeight;
     CScript ownerAddress;
     {
-        LOCK(cs_main);
-        targetHeight = ::ChainActive().Height() + 1;
         // decode vaultId
         auto vault = pcustomcsview->GetVault(vaultId);
         if (!vault)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Vault <%s> does not found", vaultId.GetHex()));
 
         ownerAddress = vault->ownerAddress;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     const auto txVersion = GetTransactionVersion(targetHeight);
@@ -1017,7 +1007,6 @@ UniValue listauctions(const JSONRPCRequest& request) {
 
     UniValue valueArr{UniValue::VARR};
 
-    LOCK(cs_main);
     pcustomcsview->ForEachVaultAuction([&](const CVaultId& vaultId, const CAuctionData& data) {
         if (!including_start)
         {
@@ -1036,7 +1025,7 @@ UniValue auctionhistoryToJSON(AuctionHistoryKey const & key, AuctionHistoryValue
 
     obj.pushKV("winner", ScriptToString(key.owner));
     obj.pushKV("blockHeight", (uint64_t) key.blockHeight);
-    if (auto block = ::ChainActive()[key.blockHeight]) {
+    if (auto block = WITH_LOCK(cs_main, return ::ChainActive()[key.blockHeight])) {
         obj.pushKV("blockHash", block->GetBlockHash().GetHex());
         obj.pushKV("blockTime", block->GetBlockTime());
     }
@@ -1127,7 +1116,6 @@ UniValue listauctionhistory(const JSONRPCRequest& request) {
         start.owner = DecodeScript(account);
     }
 
-    LOCK(cs_main);
     UniValue ret(UniValue::VARR);
 
     paccountHistoryDB->ForEachAuctionHistory([&](AuctionHistoryKey const & key, CLazySerialize<AuctionHistoryValue> valueLazy) -> bool {

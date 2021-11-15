@@ -462,9 +462,7 @@ UniValue setoracledata(const JSONRPCRequest &request) {
     CTokenPrices tokenPrices;
 
     for (const auto &value : prices.get_array().getValues()) {
-        std::string currency;
-        std::pair<CAmount, std::string> tokenAmount;
-        std::tie(currency, tokenAmount) = parseDataItem(value);
+        const auto [currency, tokenAmount] = parseDataItem(value);
         tokenPrices[tokenAmount.second][currency] = tokenAmount.first;
     }
 
@@ -473,7 +471,6 @@ UniValue setoracledata(const JSONRPCRequest &request) {
     int targetHeight;
     CScript oracleAddress;
     {
-        LOCK(cs_main);
         // check if tx parameters are valid
         auto oracleRes = pcustomcsview->GetOracleData(oracleId);
         if (!oracleRes) {
@@ -481,7 +478,7 @@ UniValue setoracledata(const JSONRPCRequest &request) {
         }
         oracleAddress = oracleRes.val->oracleAddress;
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     // timestamp is checked at consensus level
@@ -607,7 +604,6 @@ UniValue getoracledata(const JSONRPCRequest &request) {
     // decode oracle id
     COracleId oracleId = ParseHashV(request.params[0], "oracleid");
 
-    LOCK(cs_main);
     CCustomCSView mnview(*pcustomcsview); // don't write into actual DB
 
     auto oracleRes = mnview.GetOracleData(oracleId);
@@ -676,8 +672,6 @@ UniValue listoracles(const JSONRPCRequest &request) {
             limit = std::numeric_limits<decltype(limit)>::max();
         }
     }
-
-    LOCK(cs_main);
 
     UniValue value(UniValue::VARR);
     CCustomCSView view(*pcustomcsview);
@@ -766,9 +760,8 @@ UniValue listlatestrawprices(const JSONRPCRequest &request) {
         tokenPair = DecodeTokenCurrencyPair(request.params[0]);
     }
 
-    LOCK(cs_main);
     CCustomCSView mnview(*pcustomcsview);
-    auto lastBlockTime = ::ChainActive().Tip()->GetBlockTime();
+    auto lastBlockTime = WITH_LOCK(cs_main, return ::ChainActive().Tip()->GetBlockTime());
 
     UniValue result(UniValue::VARR);
     mnview.ForEachOracle([&](const COracleId& oracleId, COracle oracle) {
@@ -947,9 +940,8 @@ UniValue getprice(const JSONRPCRequest &request) {
 
     auto tokenPair = DecodeTokenCurrencyPair(request.params[0]);
 
-    LOCK(cs_main);
     CCustomCSView view(*pcustomcsview);
-    auto lastBlockTime = ::ChainActive().Tip()->GetBlockTime();
+    auto lastBlockTime = WITH_LOCK(cs_main, return ::ChainActive().Tip()->GetBlockTime());
     auto result = GetAggregatePrice(view, tokenPair.first, tokenPair.second, lastBlockTime);
     if (!result)
         throw JSONRPCError(RPC_MISC_ERROR, result.msg);
@@ -1007,9 +999,8 @@ UniValue listprices(const JSONRPCRequest& request) {
         paginationObj = request.params[0].get_obj();
     }
 
-    LOCK(cs_main);
     CCustomCSView view(*pcustomcsview);
-    auto lastBlockTime = ::ChainActive().Tip()->GetBlockTime();
+    auto lastBlockTime = WITH_LOCK(cs_main, return ::ChainActive().Tip()->GetBlockTime());
     return GetAllAggregatePrices(view, lastBlockTime, paginationObj);
 }
 
@@ -1047,15 +1038,14 @@ UniValue getfixedintervalprice(const JSONRPCRequest& request) {
     objPrice.pushKV("fixedIntervalPriceId", fixedIntervalStr);
     auto pairId = DecodePriceFeedUni(objPrice);
 
-    LOCK(cs_main);
-
     LogPrint(BCLog::ORACLE,"%s()->", __func__);  /* Continued */
 
     auto fixedPrice = pcustomcsview->GetFixedIntervalPrice(pairId);
     if (!fixedPrice)
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, fixedPrice.msg);
 
-    auto priceBlocks = GetFixedIntervalPriceBlocks(::ChainActive().Height(), *pcustomcsview);
+    auto height = WITH_LOCK(cs_main, return ::ChainActive().Height());
+    auto priceBlocks = GetFixedIntervalPriceBlocks(height, *pcustomcsview);
 
     objPrice.pushKV("activePrice", ValueFromAmount(fixedPrice.val->priceRecord[0]));
     objPrice.pushKV("nextPrice", ValueFromAmount(fixedPrice.val->priceRecord[1]));
@@ -1112,8 +1102,6 @@ UniValue listfixedintervalprices(const JSONRPCRequest& request) {
             limit = std::numeric_limits<decltype(limit)>::max();
         }
     }
-
-    LOCK(cs_main);
 
     UniValue listPrice{UniValue::VARR};
     pcustomcsview->ForEachFixedIntervalPrice([&](const CTokenCurrencyPair&, CFixedIntervalPrice fixedIntervalPrice){

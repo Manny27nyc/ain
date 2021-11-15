@@ -281,7 +281,6 @@ UniValue icxcreateorder(const JSONRPCRequest& request) {
 
     int targetHeight;
     {
-        LOCK(cs_main);
         DCT_ID idToken;
         std::unique_ptr<CToken> token;
 
@@ -309,7 +308,7 @@ UniValue icxcreateorder(const JSONRPCRequest& request) {
             order.idToken = idToken;
         }
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
@@ -428,7 +427,6 @@ UniValue icxmakeoffer(const JSONRPCRequest& request) {
 
     int targetHeight;
     {
-        LOCK(cs_main);
         auto order = pcustomcsview->GetICXOrderByCreationTx(makeoffer.orderTx);
         if (!order)
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("orderTx (%s) does not exist",makeoffer.orderTx.GetHex()));
@@ -446,7 +444,7 @@ UniValue icxmakeoffer(const JSONRPCRequest& request) {
                         pcustomcsview->GetToken(order->idToken)->CreateSymbolKey(order->idToken), ScriptToString(makeoffer.ownerAddress)));
         }
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
 
         if (targetHeight < Params().GetConsensus().EunosPayaHeight)
             makeoffer.expiry = CICXMakeOffer::DEFAULT_EXPIRY;
@@ -563,10 +561,6 @@ UniValue icxsubmitdfchtlc(const JSONRPCRequest& request) {
     int targetHeight;
     CScript authScript;
     {
-        LOCK(cs_main);
-
-        targetHeight = ::ChainActive().Height() + 1;
-
         auto offer = pcustomcsview->GetICXMakeOfferByCreationTx(submitdfchtlc.offerTx);
         if (!offer)
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("offerTx (%s) does not exist",submitdfchtlc.offerTx.GetHex()));
@@ -574,6 +568,8 @@ UniValue icxsubmitdfchtlc(const JSONRPCRequest& request) {
         auto order = pcustomcsview->GetICXOrderByCreationTx(offer->orderTx);
         if (!order)
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("orderTx (%s) does not exist",offer->orderTx.GetHex()));
+
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
 
         if (order->orderType == CICXOrder::TYPE_INTERNAL)
         {
@@ -720,10 +716,6 @@ UniValue icxsubmitexthtlc(const JSONRPCRequest& request) {
     int targetHeight;
     CScript authScript;
     {
-        LOCK(cs_main);
-
-        targetHeight = ::ChainActive().Height() + 1;
-
         auto offer = pcustomcsview->GetICXMakeOfferByCreationTx(submitexthtlc.offerTx);
         if (!offer)
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("offerTx (%s) does not exist",submitexthtlc.offerTx.GetHex()));\
@@ -740,6 +732,8 @@ UniValue icxsubmitexthtlc(const JSONRPCRequest& request) {
         {
             authScript = order->ownerAddress;
         }
+
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
@@ -839,12 +833,7 @@ UniValue icxclaimdfchtlc(const JSONRPCRequest& request) {
     else
         throw JSONRPCError(RPC_INVALID_PARAMETER,"Invalid parameters, argument \"seed\" must be non-null");
 
-    int targetHeight;
-    {
-        LOCK(cs_main);
-
-        targetHeight = ::ChainActive().Height() + 1;
-    }
+    int targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
     metadata << static_cast<unsigned char>(CustomTxType::ICXClaimDFCHTLC)
@@ -929,7 +918,6 @@ UniValue icxcloseorder(const JSONRPCRequest& request) {
     int targetHeight;
     CScript authScript;
     {
-        LOCK(cs_main);
         auto order = pcustomcsview->GetICXOrderByCreationTx(closeorder.orderTx);
         if (!order)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "orderTx (" + closeorder.orderTx.GetHex() + ") does not exist");
@@ -939,7 +927,7 @@ UniValue icxcloseorder(const JSONRPCRequest& request) {
         if (!order->closeTx.IsNull())
             throw JSONRPCError(RPC_INVALID_PARAMETER,"orderTx (" + closeorder.orderTx.GetHex() + " is already closed!");
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
@@ -1025,8 +1013,6 @@ UniValue icxcloseoffer(const JSONRPCRequest& request) {
     int targetHeight;
     CScript authScript;
     {
-        LOCK(cs_main);
-
         auto offer = pcustomcsview->GetICXMakeOfferByCreationTx(closeoffer.offerTx);
         if (!offer)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "OfferTx (" + closeoffer.offerTx.GetHex() + ") does not exist");
@@ -1036,7 +1022,7 @@ UniValue icxcloseoffer(const JSONRPCRequest& request) {
         if (!offer->closeTx.IsNull())
             throw JSONRPCError(RPC_INVALID_PARAMETER,"OfferTx (" + closeoffer.offerTx.GetHex() + " is already closed!");
 
-        targetHeight = ::ChainActive().Height() + 1;
+        targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
     }
 
     CDataStream metadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
@@ -1098,9 +1084,7 @@ UniValue icxgetorder(const JSONRPCRequest& request) {
     UniValue ret(UniValue::VOBJ);
     ret.pushKV("EXPERIMENTAL warning:", "ICX and Atomic Swap are experimental features. You might end up losing your funds. USE IT AT YOUR OWN RISK.");
 
-    LOCK(cs_main);
-
-    uint256 orderTxid= uint256S(request.params[0].getValStr());
+    uint256 orderTxid = uint256S(request.params[0].getValStr());
     auto order = pcustomcsview->GetICXOrderByCreationTx(orderTxid);
     if (order)
     {
@@ -1177,8 +1161,6 @@ UniValue icxlistorders(const JSONRPCRequest& request) {
 
     UniValue ret(UniValue::VOBJ);
     ret.pushKV("WARNING", "ICX and Atomic Swap are experimental features. You might end up losing your funds. USE IT AT YOUR OWN RISK.");
-
-    LOCK(cs_main);
 
     if (idToken.v != std::numeric_limits<uint32_t>::max())
     {
@@ -1292,8 +1274,6 @@ UniValue icxlisthtlcs(const JSONRPCRequest& request) {
 
     UniValue ret(UniValue::VOBJ);
     ret.pushKV("WARNING", "ICX and Atomic Swap are experimental features. You might end up losing your funds. USE IT AT YOUR OWN RISK.");
-
-    LOCK(cs_main);
 
     auto dfchtlclambda = [&](CICXOrderView::TxidPairKey const & key, uint8_t status) {
         if (key.first != offerTxid || !limit)

@@ -2293,7 +2293,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
     if (block.GetHash() == chainparams.GetConsensus().hashGenesisBlock) {
         if (!fJustCheck) {
             view.SetBestBlock(pindex->GetBlockHash());
-            pcustomcsview->CreateDFIToken();
+            mnview.CreateDFIToken();
             // init view|db with genesis here
             for (size_t i = 0; i < block.vtx.size(); ++i) {
                 CHistoryWriters writers{paccountHistoryDB.get(), nullptr, nullptr};
@@ -2818,15 +2818,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
             cache.EraseStoredVariables(static_cast<uint32_t>(pindex->nHeight));
         }
 
-        // construct undo
-        auto& flushable = cache.GetStorage();
-        auto undo = CUndo::Construct(mnview.GetStorage(), flushable.GetRaw());
-        // flush changes to underlying view
-        cache.Flush();
-        // write undo
-        if (!undo.before.empty()) {
-            mnview.SetUndo(UndoKey{static_cast<uint32_t>(pindex->nHeight), uint256() }, undo); // "zero hash"
-        }
+        mnview.AddUndo(cache, {}, pindex->nHeight);
     }
 
     // Write any UTXO burns
@@ -2865,7 +2857,8 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
             return pruned.DelUndo(key).ok;
         });
         if (pruneStarted) {
-            auto& map = pruned.GetStorage().GetRaw();
+            auto& flushable = static_cast<CFlushableStorageKV&>(pruned.GetStorage());
+            auto& map = flushable.GetRaw();
             compactBegin = map.begin()->first;
             compactEnd = map.rbegin()->first;
             pruned.Flush();
@@ -3381,30 +3374,20 @@ bool CChainState::FlushStateToDisk(
                 UnlinkPrunedFiles(setFilesToPrune);
             nLastWrite = nNow;
         }
-        // use a bit more memory in normal usage
-        const size_t memoryCacheSizeMax = IsInitialBlockDownload() ? nCustomMemUsage : (nCustomMemUsage << 1);
-        bool fMemoryCacheLarge = fDoFullFlush || (mode == FlushStateMode::IF_NEEDED && pcustomcsview->SizeEstimate() > memoryCacheSizeMax);
-        // Flush best chain related state. This can only be done if the blocks / block index write was also done.
-        if (fMemoryCacheLarge && !CoinsTip().GetBestBlock().IsNull()) {
-            // Flush view first to estimate size on disk later
+        if (fDoFullFlush || mode == FlushStateMode::IF_NEEDED) {
             if (!pcustomcsview->Flush()) {
-                return AbortNode(state, "Failed to write db batch");
+                return AbortNode(state, "Failed to write cache");
             }
-            // Typical Coin structures on disk are around 48 bytes in size.
-            // Pushing a new one to the database can cause it to be written
-            // twice (once in the log, and once in the tables). This is already
-            // an overestimation, as most will delete an existing entry or
-            // overwrite one. Still, use a conservative safety factor of 2.
-            if (!CheckDiskSpace(GetDataDir(), 48 * 2 * 2 * CoinsTip().GetCacheSize() + pcustomcsDB->SizeEstimate())) {
-                return AbortNode(state, "Disk space is too low!", _("Error: Disk space is too low!").translated, CClientUIInterface::MSG_NOPREFIX);
-            }
+        }
+        if (!CoinsTip().GetBestBlock().IsNull()) {
             // Flush the chainstate (which may refer to block index entries).
-            if (!CoinsTip().Flush() || !pcustomcsDB->Flush()) {
-                return AbortNode(state, "Failed to write to coin or masternode db to disk");
+            if (!CoinsTip().Flush() || !pcustomcsview->Flush()) {
+                return AbortNode(state, "Failed to write to coin or sync db to disk");
             }
             if (!compactBegin.empty() && !compactEnd.empty()) {
                 auto time = GetTimeMillis();
-                pcustomcsDB->Compact(compactBegin, compactEnd);
+                auto pcustomcsDB = static_cast<CStorageLevelDB&>(pcustomcsview->GetStorage());
+                pcustomcsDB.Compact(compactBegin, compactEnd);
                 compactBegin.clear();
                 compactEnd.clear();
                 LogPrint(BCLog::BENCH, "    - DB compacting takes: %dms\n", GetTimeMillis() - time);
@@ -3541,7 +3524,7 @@ bool CChainState::DisconnectTip(CValidationState& state, const CChainParams& cha
     int64_t nStart = GetTimeMicros();
     {
         CCoinsViewCache view(&CoinsTip());
-        CCustomCSView mnview(*pcustomcsview.get());
+        CCustomCSView mnview(*pcustomcsview);
         assert(view.GetBestBlock() == pindexDelete->GetBlockHash());
         std::vector<CAnchorConfirmMessage> disconnectedConfirms;
         if (DisconnectBlock(block, pindexDelete, view, mnview, disconnectedConfirms) != DISCONNECT_OK) {
@@ -3707,7 +3690,7 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     LogPrint(BCLog::BENCH, "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * MILLI, nTimeReadFromDisk * MICRO);
     {
         CCoinsViewCache view(&CoinsTip());
-        CCustomCSView mnview(*pcustomcsview.get());
+        CCustomCSView mnview(*pcustomcsview);
         std::vector<uint256> rewardedAnchors;
         bool rv = ConnectBlock(blockConnecting, state, pindexNew, view, mnview, chainparams, rewardedAnchors);
         GetMainSignals().BlockChecked(blockConnecting, state);
@@ -3769,6 +3752,7 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     if (pindexNew->nHeight >= Params().GetConsensus().DakotaHeight &&
             pindexNew->nHeight % Params().GetConsensus().mn.anchoringTeamChange == 0) {
         pcustomcsview->CalcAnchoringTeams(blockConnecting.stakeModifier, pindexNew);
+        pcustomcsview->Flush();
 
         // Delete old and now invalid anchor confirms
         panchorAwaitingConfirms->Clear();
@@ -5230,7 +5214,7 @@ bool TestBlockValidity(CValidationState& state, const CChainParams& chainparams,
     assert(pindexPrev && pindexPrev == ::ChainActive().Tip());
     CCoinsViewCache viewNew(&::ChainstateActive().CoinsTip());
     std::vector<uint256> dummyRewardedAnchors;
-    CCustomCSView mnview(*pcustomcsview.get());
+    CCustomCSView mnview(*pcustomcsview);
     uint256 block_hash(block.GetHash());
     CBlockIndex indexDummy(block);
     indexDummy.pprev = pindexPrev;
@@ -5628,7 +5612,7 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
     nCheckLevel = std::max(0, std::min(4, nCheckLevel));
     LogPrintf("Verifying last %i blocks at level %i\n", nCheckDepth, nCheckLevel);
     CCoinsViewCache coins(coinsview);
-    CCustomCSView mnview(*pcustomcsview.get());
+    CCustomCSView mnview(*pcustomcsview);
     CBlockIndex* pindex;
     CBlockIndex* pindexFailure = nullptr;
     int nGoodTransactions = 0;

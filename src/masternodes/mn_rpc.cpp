@@ -14,9 +14,8 @@ CAccounts GetAllMineAccounts(CWallet * const pwallet) {
 
     CAccounts walletAccounts;
 
-    LOCK(cs_main);
     CCustomCSView mnview(*pcustomcsview);
-    auto targetHeight = ::ChainActive().Height() + 1;
+    auto targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
 
     mnview.ForEachAccount([&](CScript const & account) {
         if (IsMineCached(*pwallet, account) == ISMINE_SPENDABLE) {
@@ -427,12 +426,12 @@ void execTestTx(const CTransaction& tx, uint32_t height, CTransactionRef optAuth
     auto txMessage = customTypeToMessage(txType);
     auto res = CustomMetadataParse(height, Params().GetConsensus(), metadata, txMessage);
     if (res) {
-        LOCK(cs_main);
+        auto time = WITH_LOCK(cs_main, return ::ChainActive().Tip()->nTime);
         CCoinsViewCache coins(&::ChainstateActive().CoinsTip());
         if (optAuthTx)
             AddCoins(coins, *optAuthTx, height);
         CCustomCSView view(*pcustomcsview);
-        res = CustomTxVisit(view, coins, tx, height, Params().GetConsensus(), txMessage, ::ChainActive().Tip()->nTime);
+        res = CustomTxVisit(view, coins, tx, height, Params().GetConsensus(), txMessage, time);
     }
     if (!res) {
         if (res.code == CustomTxErrCodes::NotEnoughBalance) {
@@ -643,8 +642,6 @@ UniValue getgov(const JSONRPCRequest& request) {
                },
     }.Check(request);
 
-    LOCK(cs_main);
-
     auto name = request.params[0].getValStr();
     auto var = pcustomcsview->GetVariable(name);
     if (var) {
@@ -670,8 +667,6 @@ UniValue listgovs(const JSONRPCRequest& request) {
 
     std::vector<std::string> vars{"ICX_TAKERFEE_PER_BTC", "LP_DAILY_LOAN_TOKEN_REWARD", "LP_LOAN_TOKEN_SPLITS", "LP_DAILY_DFI_REWARD",
                                   "LOAN_LIQUIDATION_PENALTY", "LP_SPLITS", "ORACLE_BLOCK_INTERVAL", "ORACLE_DEVIATION"};
-
-    LOCK(cs_main);
 
     // Get all stored Gov var changes
     auto pending = pcustomcsview->GetAllStoredVariables();
@@ -716,15 +711,13 @@ UniValue isappliedcustomtx(const JSONRPCRequest& request) {
 
     RPCTypeCheck(request.params, {UniValue::VSTR, UniValue::VNUM}, false);
 
-    LOCK(cs_main);
-
     UniValue result(UniValue::VBOOL);
     result.setBool(false);
 
     uint256 txHash = ParseHashV(request.params[0], "txid");
     int blockHeight = request.params[1].get_int();
 
-    auto blockindex = ::ChainActive()[blockHeight];
+    auto blockindex = WITH_LOCK(cs_main, return ::ChainActive()[blockHeight]);
     if (!blockindex) {
         return result;
     }

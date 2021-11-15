@@ -21,7 +21,6 @@
 #include <unordered_map>
 
 std::unique_ptr<CCustomCSView> pcustomcsview;
-std::unique_ptr<CStorageLevelDB> pcustomcsDB;
 
 int GetMnActivationDelay(int height)
 {
@@ -521,7 +520,6 @@ uint16_t CMasternodesView::GetTimelock(const uint256& nodeId, const CMasternode&
 {
     auto timelock = ReadBy<Timelock, uint16_t>(nodeId);
     if (timelock) {
-        LOCK(cs_main);
         // Get last height
         auto lastHeight = height - 1;
 
@@ -530,6 +528,7 @@ uint16_t CMasternodesView::GetTimelock(const uint256& nodeId, const CMasternode&
             return *timelock;
         }
 
+        LOCK(cs_main);
         // Get timelock expiration time. Timelock set in weeks, convert to seconds.
         const auto timelockExpire = ::ChainActive()[node.creationHeight]->nTime + (*timelock * 7 * 24 * 60 * 60);
 
@@ -853,6 +852,18 @@ void CCustomCSView::CreateAndRelayConfirmMessageIfNeed(const CAnchorIndex::Ancho
     }
 }
 
+void CCustomCSView::AddUndo(CCustomCSView & cache, uint256 const & txid, uint32_t height)
+{
+    auto& flushable = static_cast<CFlushableStorageKV&>(cache.GetStorage());
+    auto undo = CUndo::Construct(GetStorage(), flushable.GetRaw());
+    // flush changes
+    cache.Flush();
+    // write undo
+    if (!undo.before.empty()) {
+        SetUndo(UndoKey{height, txid}, undo);
+    }
+}
+
 void CCustomCSView::OnUndoTx(uint256 const & txid, uint32_t height)
 {
     const auto undo = GetUndo(UndoKey{height, txid});
@@ -1050,8 +1061,10 @@ Res CCustomCSView::PopulateCollateralData(CCollateralLoans& result, CVaultId con
     return Res::Ok();
 }
 
-uint256 CCustomCSView::MerkleRoot() {
-    auto& rawMap = GetStorage().GetRaw();
+uint256 CCustomCSView::MerkleRoot()
+{
+    auto& flushable = static_cast<CFlushableStorageKV&>(GetStorage());
+    auto& rawMap = flushable.GetRaw();
     if (rawMap.empty()) {
         return {};
     }

@@ -1026,6 +1026,107 @@ UniValue testpoolswap(const JSONRPCRequest& request) {
     return UniValue(res.msg);
 }
 
+
+UniValue testcompositeswap(const JSONRPCRequest& request) {
+    auto pwallet = GetWallet(request);
+
+    RPCHelpMan{"testcompositeswap",
+               "\nTests a compositeswap transaction with given metadata and returns compositeswap result.\n" +
+               HelpRequiringPassphrase(pwallet) + "\n",
+               {
+                       {"metadata", RPCArg::Type::OBJ, RPCArg::Optional::NO, "",
+                        {
+                                {"from", RPCArg::Type::STR, RPCArg::Optional::NO,
+                                 "Address of the owner of tokenA."},
+                                {"tokenFrom", RPCArg::Type::STR, RPCArg::Optional::NO,
+                                 "One of the keys may be specified (id/symbol)"},
+                                {"amountFrom", RPCArg::Type::NUM, RPCArg::Optional::NO,
+                                 "tokenFrom coins amount"},
+                                {"to", RPCArg::Type::STR, RPCArg::Optional::NO,
+                                 "Address of the owner of tokenB."},
+                                {"tokenTo", RPCArg::Type::STR, RPCArg::Optional::NO,
+                                 "One of the keys may be specified (id/symbol)"},
+                                {"maxPrice", RPCArg::Type::NUM, RPCArg::Optional::OMITTED,
+                                 "Maximum acceptable price"},
+                        },
+                       },
+                       {"inputs", RPCArg::Type::ARR, RPCArg::Optional::OMITTED_NAMED_ARG, "A json array of json objects",
+                        {
+                                {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                                 {
+                                         {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
+                                         {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output number"},
+                                 },
+                                },
+                        },
+                       },
+               },
+               RPCResult{
+                       "\"hash\"                  (string) The hex-encoded hash of broadcasted transaction\n"
+               },
+               RPCExamples{
+                       HelpExampleCli("testcompositeswap",   "'{\"from\":\"MyAddress\","
+                                                         "\"tokenFrom\":\"MyToken1\","
+                                                         "\"amountFrom\":\"0.001\","
+                                                         "\"to\":\"Address\","
+                                                         "\"tokenTo\":\"Token2\","
+                                                         "\"maxPrice\":\"0.01\""
+                                                         "}' '[{\"txid\":\"id\",\"vout\":0}]'")
+                       + HelpExampleRpc("testcompositeswap", "'{\"from\":\"MyAddress\","
+                                                         "\"tokenFrom\":\"MyToken1\","
+                                                         "\"amountFrom\":\"0.001\","
+                                                         "\"to\":\"Address\","
+                                                         "\"tokenTo\":\"Token2\","
+                                                         "\"maxPrice\":\"0.01\""
+                                                         "}' '[{\"txid\":\"id\",\"vout\":0}]'")
+               },
+    }.Check(request);
+
+    if (pwallet->chain().isInitialBlockDownload()) {
+        throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD, "Cannot create transactions while still in Initial Block Download");
+    }
+    pwallet->BlockUntilSyncedToCurrentChain();
+
+    int targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
+    if (targetHeight < Params().GetConsensus().FortCanningHeight) {
+        throw JSONRPCError(RPC_INVALID_REQUEST, "compositeswap is available post Fort Canning");
+    }
+
+    RPCTypeCheck(request.params, {UniValue::VOBJ, UniValue::VARR}, true);
+
+    CPoolSwapMessageV2 poolSwapMsgV2{};
+    CPoolSwapMessage& poolSwapMsg = poolSwapMsgV2.swapInfo;
+    CheckAndFillPoolSwapMessage(request, poolSwapMsg);
+
+    // test execution and returns execution result
+    Res res = Res::Ok();
+    {
+        LOCK(cs_main);
+        CCustomCSView dummy(*pcustomcsview); // create dummy cache for test state writing
+        // If no direct swap found search for composite swap
+        if (!dummy.GetPoolPair(poolSwapMsg.idTokenFrom, poolSwapMsg.idTokenTo)) {
+
+            auto compositeSwap = CPoolSwap(poolSwapMsg, targetHeight);
+            res = compositeSwap.TextExecuteSwap(dummy);
+
+            if (!res.ok) {
+                std::string errorMsg{"Cannot find usable pool pair."};
+                if (!compositeSwap.errors.empty()) {
+                    errorMsg += " Details: (";
+                    for (size_t i{0}; i < compositeSwap.errors.size(); ++i) {
+                        errorMsg += '"' + compositeSwap.errors[i].first + "\":\"" +  compositeSwap.errors[i].second + '"' + (i + 1 < compositeSwap.errors.size() ? "," : "");
+                    }
+                    errorMsg += ')';
+                }
+                throw JSONRPCError(RPC_INVALID_REQUEST, errorMsg);
+            }
+        }
+
+    }
+
+    return UniValue(res.msg);
+}
+
 UniValue listpoolshares(const JSONRPCRequest& request) {
     RPCHelpMan{"listpoolshares",
                "\nReturns information about pool shares.\n",
@@ -1136,6 +1237,7 @@ static const CRPCCommand commands[] =
     {"poolpair",    "compositeswap",         &compositeswap,         {"metadata", "inputs"}},
     {"poolpair",    "listpoolshares",        &listpoolshares,        {"pagination", "verbose", "is_mine_only"}},
     {"poolpair",    "testpoolswap",          &testpoolswap,          {"metadata"}},
+    {"poolpair",    "testcompositeswap",     &testcompositeswap,     {"metadata", "inputs"}},
 };
 
 void RegisterPoolpairRPCCommands(CRPCTable& tableRPC) {

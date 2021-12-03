@@ -484,6 +484,9 @@ public:
 
     std::vector<DCT_ID> CalculateSwaps(CCustomCSView& view);
     Res ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs);
+    Res TextExecuteSwap(CCustomCSView& view);
+    std::vector<std::vector<DCT_ID>> CalculatePoolPaths(CCustomCSView& view);
+
 };
 
 #endif // DEFI_MASTERNODES_MN_CHECKS_H

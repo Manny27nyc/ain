@@ -242,6 +242,16 @@ class PoolPairCompositeTest(DefiTestFramework):
         }, collateral, [])
         self.nodes[0].generate(1)
 
+        estimateCompositePathsRes = self.nodes[0].estimatecompositepaths({
+            "from": source,
+            "tokenFrom": symbolLTC,
+            "amountFrom": ltc_to_doge_from,
+            "to": destination,
+            "tokenTo": symbolDOGE,
+        }, [])
+
+        print("estimateCompositePathsRes:", estimateCompositePathsRes)
+
         testCPoolSwapRes = self.nodes[0].testcompositeswap({
             "from": source,
             "tokenFrom": symbolLTC,
